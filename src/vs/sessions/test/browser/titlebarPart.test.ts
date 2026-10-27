@@ -22,6 +22,8 @@ import { TitlebarPart, TitleService } from '../../browser/parts/titlebarPart.js'
 import '../../../workbench/contrib/modernUI/browser/media/titlebar.css';
 // eslint-disable-next-line local/code-import-patterns -- Use the rendered command center's sizing and border.
 import '../../contrib/sessions/browser/media/sessionsTitleBarWidget.css';
+import { IconLabel } from '../../../base/browser/ui/iconLabel/iconLabel.js';
+import '../../browser/parts/media/chatCompositeBar.css';
 import '../../browser/media/workbench.css';
 
 suite('Sessions - Titlebar Part', () => {
@@ -334,6 +336,80 @@ suite('Sessions - Titlebar Part', () => {
 
 			const expected = { gap, width: 22, height: 22, commandCenter: 400 };
 			assert.deepStrictEqual(states, [expected, expected, expected]);
+		});
+	}
+
+	test('shows a session header in place of the title only while it hosts one; a title bar that is never asked to is as before', () => {
+		const { instantiationService } = createTitlebar();
+		const root = append(mainWindow.document.body, $('.monaco-workbench.agent-sessions-workbench'));
+		store.add(toDisposable(() => root.remove()));
+		const createPart = () => {
+			const part = store.add(instantiationService.createInstance(TitlebarPart, Parts.TITLEBAR_PART, mainWindow));
+			part.create(append(root, $('.part.titlebar')));
+			return part;
+		};
+		const shown = (element: Element | null) => !!element && mainWindow.getComputedStyle(element).display !== 'none';
+		const read = (part: TitlebarPart) => ({
+			left: [...part.element.querySelector('.titlebar-left')!.children].map(child => child.className),
+			hostsHeader: part.element.classList.contains('hosts-session-header'),
+			headerShown: shown(part.element.querySelector('.session-header-host')),
+			titleShown: shown(part.element.querySelector('.window-title')),
+		});
+
+		const main = read(createPart());
+		const chatWindow = createPart();
+		const header = append(chatWindow.getSessionHeaderHost(), $('.session-header-bar'));
+		const notHosting = read(chatWindow);
+		chatWindow.setHostsSessionHeader(true);
+		const hosting = { ...read(chatWindow), header: shown(header) };
+		chatWindow.setHostsSessionHeader(false);
+
+		const left = main.left;
+		assert.deepStrictEqual({ main, notHosting, hosting, after: read(chatWindow) }, {
+			main: { left, hostsHeader: false, headerShown: false, titleShown: true },
+			notHosting: { left: [...left, 'session-header-host'], hostsHeader: false, headerShown: false, titleShown: true },
+			hosting: { left: [...left, 'session-header-host'], hostsHeader: true, headerShown: true, titleShown: false, header: true },
+			after: { left: [...left, 'session-header-host'], hostsHeader: false, headerShown: false, titleShown: true },
+		});
+	});
+
+	for (const chatColumn of [true, false]) {
+		test(`a hosted session header gives way to the title bar's actions, its title shortening, ${chatColumn ? 'above the chat\'s column only' : 'across the window'}`, () => {
+			const root = append(mainWindow.document.body, $('.monaco-workbench.agent-sessions-workbench.mac'));
+			store.add(toDisposable(() => root.remove()));
+			root.style.width = '480px';
+			const titlebar = append(root, $(`.part.titlebar.hosts-session-header${chatColumn ? '.header-chat-column' : ''}`));
+			titlebar.style.height = '35px';
+			const content = append(titlebar, $('.titlebar-container.sessions-titlebar-container.has-center'));
+			const left = append(content, $('.titlebar-left'));
+			append(left, $('.window-controls-container')).style.cssText = 'width: 70px; flex-shrink: 0;';
+			// The session header, as it shows in the title bar.
+			const header = append(append(append(left, $('.session-header-host')), $('.chat-composite-bar.session-header-bar.window-chrome')), $('.chat-composite-bar-header'));
+			append(header, $('.chat-composite-bar-session-icon')).style.width = '16px';
+			const titleRow = append(append(header, $('.chat-composite-bar-header-main')), $('.chat-composite-bar-title-row'));
+			const title = append(append(titleRow, $('.chat-composite-bar-session-title')), $('span.chat-composite-bar-session-title-text'));
+			store.add(new IconLabel(title)).setLabel('A long title of a chat, which does not fit beside the actions of the title bar of its window');
+			append(titleRow, $('.chat-composite-bar-title-actions')).style.width = '20px';
+			const center = append(content, $('.titlebar-center'));
+			const actions = append(center, $('.titlebar-actions-container.titlebar-center-actions-container'));
+			actions.style.cssText = 'width: 66px; flex-shrink: 0;';
+			const right = append(content, $('.titlebar-right'));
+			append(right, $('.titlebar-actions-container')).style.cssText = 'width: 52px; flex-shrink: 0;';
+
+			const bounds = titlebar.getBoundingClientRect();
+			const actionBounds = actions.getBoundingClientRect();
+			// The sections as they size: the header's can shrink below its title; above the chat's column, it takes the room left.
+			const sizing = (element: HTMLElement) => { const style = mainWindow.getComputedStyle(element); return `${style.flexGrow} ${style.flexShrink} ${style.flexBasis} min ${style.minWidth}`; };
+			assert.deepStrictEqual({
+				overflowing: [content, left, center, right].some(element => element.scrollWidth > element.clientWidth),
+				actionsShown: actionBounds.width === 66 && actionBounds.right <= bounds.right,
+				titleShortened: [title, ...title.querySelectorAll('*')].some(element => element.clientWidth > 0 && element.clientWidth < element.scrollWidth),
+				left: sizing(left).endsWith('min 0px'),
+				chatColumn: chatColumn ? [sizing(left), sizing(center).split(' min')[0], sizing(right).split(' min')[0]] : undefined,
+			}, {
+				overflowing: false, actionsShown: true, titleShortened: true, left: true,
+				chatColumn: chatColumn ? ['1 1 auto min 0px', '0 0 auto', '0 0 auto'] : undefined,
+			});
 		});
 	}
 
